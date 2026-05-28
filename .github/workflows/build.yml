@@ -1,0 +1,60 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup ffmpeg
+        run: choco install ffmpeg-full -y --no-progress
+        shell: powershell
+
+      - name: Build project structure
+        run: |
+          New-Item -Force -ItemType Directory renderer | Out-Null
+          New-Item -Force -ItemType Directory "assets\icons" | Out-Null
+          New-Item -Force -ItemType Directory ffmpeg-bin | Out-Null
+          Copy-Item (Get-Command ffmpeg).Source "ffmpeg-bin\ffmpeg.exe"
+          @("editor.html","editor.js","ffmpeg.min.js","ffmpeg-core.js","ffmpeg-core.wasm","ffmpeg-core.worker.js") | ForEach-Object {
+            if (Test-Path $_) { Copy-Item $_ renderer\ -Force }
+          }
+          @("icon128.png","icon16.png","icon48.png","icon256.png") | ForEach-Object {
+            if (Test-Path $_) { Copy-Item $_ "assets\icons\" -Force }
+          }
+          python -c "
+from PIL import Image
+import struct, io
+src = 'icon256.png' if __import__('os').path.exists('icon256.png') else 'icon128.png'
+img = Image.open(src).convert('RGBA').resize((256,256))
+buf = io.BytesIO()
+img.save(buf, 'PNG')
+data = buf.getvalue()
+open('assets/icons/icon.ico','wb').write(struct.pack('<HHH',0,1,1)+struct.pack('<BBBBHHII',0,0,0,0,1,32,len(data),22)+data)
+print('icon.ico OK')
+"
+        shell: powershell
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows installer
+        run: npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuomsiangVIDEOCUT-Setup
+          path: dist/*.exe
+          retention-days: 30

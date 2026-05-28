@@ -1,0 +1,88 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup ffmpeg
+        run: choco install ffmpeg-full -y --no-progress
+        shell: powershell
+
+      - name: Build project structure
+        run: |
+          # สร้าง folders
+          New-Item -Force -ItemType Directory renderer | Out-Null
+          New-Item -Force -ItemType Directory "assets\icons" | Out-Null
+          New-Item -Force -ItemType Directory ffmpeg-bin | Out-Null
+
+          # copy ffmpeg
+          Copy-Item (Get-Command ffmpeg).Source "ffmpeg-bin\ffmpeg.exe"
+
+          # copy renderer files
+          @("editor.html","editor.js","ffmpeg.min.js","ffmpeg-core.js","ffmpeg-core.wasm","ffmpeg-core.worker.js") | ForEach-Object {
+            if (Test-Path $_) { Copy-Item $_ renderer\ -Force }
+          }
+
+          # copy png icons
+          @("icon128.png","icon16.png","icon48.png","icon256.png") | ForEach-Object {
+            if (Test-Path $_) { Copy-Item $_ "assets\icons\" -Force }
+          }
+
+          # สร้าง icon.ico จาก icon128.png ด้วย Python
+          $iconSrc = if (Test-Path "icon256.png") { "icon256.png" } elseif (Test-Path "icon128.png") { "icon128.png" } else { $null }
+          if ($iconSrc) {
+            python -c "
+from PIL import Image
+import struct, io
+img = Image.open('$iconSrc').convert('RGBA').resize((256,256))
+buf = io.BytesIO()
+img.save(buf, 'PNG')
+data = buf.getvalue()
+hdr = struct.pack('<HHH',0,1,1)
+ent = struct.pack('<BBBBHHII',0,0,0,0,1,32,len(data),22)
+open('assets/icons/icon.ico','wb').write(hdr+ent+data)
+print('icon.ico created OK')
+"
+          }
+
+          if (Test-Path "assets\icons\icon.ico") { Write-Host "icon.ico ready" }
+          else { Write-Host "ERROR: icon.ico missing!" }
+        shell: powershell
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows installer
+        run: npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SuomsiangVIDEOCUT-Setup
+          path: dist/*.exe
+          retention-days: 30
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: "สุ่มเสียง VIDEOCUT v1.0.${{ github.run_number }}"
+          body: |
+            ## ดาวน์โหลดและติดตั้ง
+            กดที่ไฟล์ SuomsiangVIDEOCUT-Setup.exe ด้านล่าง
+            ดับเบิลคลิก แล้วติดตั้งได้เลย!
+          files: dist/*.exe
+          token: ${{ secrets.GITHUB_TOKEN }}
